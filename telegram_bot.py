@@ -9,17 +9,17 @@ print("=" * 60)
 print("🤖 WORM GPT TELEGRAM BOT - STARTING...")
 print("=" * 60)
 
-# HARDCODED API KEYS
+# HARDCODED Telegram token (consider using env var in production)
 TELEGRAM_BOT_TOKEN = "8573861614:AAH3yCPlTkKdS-Jg84OrZbsHGhmKYOL-uDM"
-OPENAI_API_KEY = "sk_live_f0aee32c-be06-4989-b0f0-1167dc2d5e4adc56"
 
 # WormGPT settings (can be overridden with env vars)
+# Only WormGPT is used; set WORMGPT_API_KEY in environment.
 WORMGPT_API_URL = os.getenv('WORMGPT_API_URL', 'https://api.wrmgpt.com')
-WORMGPT_API_KEY = os.getenv('WORMGPT_API_KEY', OPENAI_API_KEY)
+WORMGPT_API_KEY = os.getenv('WORMGPT_API_KEY', '')
 DEFAULT_MODEL = os.getenv('WORMGPT_DEFAULT_MODEL', 'wormgpt-v7')
 
 print(f"🔑 Telegram Token: {TELEGRAM_BOT_TOKEN}")
-print(f"🔑 OpenAI Key: {OPENAI_API_KEY}")
+print(f"🔑 WormGPT Key: {'(set)' if WORMGPT_API_KEY else '(not set)'}")
 
 # Owner and contact info
 OWNER_CHAT_ID = 6094186912
@@ -153,7 +153,10 @@ try:
     print("📦 Importing modules...")
     
     from telegram import Update, BotCommand
-    from telegram.request import Request
+    try:
+        from telegram.request import Request
+    except Exception:
+        Request = None
     from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
     import requests
 
@@ -189,7 +192,7 @@ class ZARENAI:
         print("✅ WORM GPT personality loaded!")
     
     def get_answer(self, question, model=None):
-        """Get AI response from OpenAI"""
+        """Get AI response from WormGPT"""
         try:
             print(f"🧠 Processing question: {question[:50]}...")
             # Call WormGPT-compatible API using configured URL/key/model
@@ -254,7 +257,7 @@ class ZARENAI:
             return answer
             
         except Exception as e:
-            error_msg = f"OpenAI API Error: {str(e)}"
+            error_msg = f"WormGPT API Error: {str(e)}"
             print(error_msg)
             return error_msg
 
@@ -266,14 +269,17 @@ print("✅ WORM GPT instance created successfully!")
 # Create Telegram application
 print("📱 Creating Telegram application...")
 # Configure HTTP request timeouts for the telegram client to reduce connect/read timeouts
-try:
-    request = Request(con_pool_size=8, connect_timeout=20, read_timeout=60, pool_timeout=5)
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request).build()
-    print("✅ Telegram application created with custom Request timeouts!")
-except Exception:
-    # Fallback to default builder if something goes wrong
+if Request is not None:
+    try:
+        request = Request(con_pool_size=8, connect_timeout=20, read_timeout=60, pool_timeout=5)
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request).build()
+        print("✅ Telegram application created with custom Request timeouts!")
+    except Exception:
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        print("⚠️ Telegram application created with default Request (custom timeouts failed).")
+else:
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    print("⚠️ Telegram application created with default Request (custom timeouts failed).")
+    print("⚠️ Telegram Request class unavailable; created application with default Request.")
 
 # Define command handlers
 async def start_command(update: Update, context: CallbackContext):
