@@ -2,6 +2,7 @@ import asyncio
 import sys
 import os
 import json
+import time
 
 print("=" * 60)
 print("🤖 WORM GPT TELEGRAM BOT - STARTING...")
@@ -18,36 +19,117 @@ print(f"🔑 OpenAI Key: {OPENAI_API_KEY}")
 OWNER_CHAT_ID = 6094186912
 WHATSAPP_CONTACT = "+2349163768735"
 
-# Allowed IDs persistence
+# Allowed users persistence (migrates older simple list to dict)
 ALLOWED_IDS_FILE = os.path.join(os.path.dirname(__file__), 'allowed_ids.json')
 
+def _default_users_structure(owner_id):
+    return {str(owner_id): {"premium": True, "expires": None, "trial": 0}}
+
 def load_allowed_ids():
-    # Priority: file, then environment var
+    # Returns dict: id -> {premium:bool, expires:epoch or None, trial:int}
     if os.path.exists(ALLOWED_IDS_FILE):
         try:
             with open(ALLOWED_IDS_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            return set(str(i) for i in data.get('allowed', []))
+            # Migration: old format {allowed: [ids]}
+            if isinstance(data, dict) and 'allowed' in data:
+                users = {}
+                for uid in data.get('allowed', []):
+                    users[str(uid)] = {"premium": True, "expires": None, "trial": 0}
+                return users
+            if isinstance(data, dict) and 'users' in data:
+                return data['users']
+            # If file is already users dict
+            if isinstance(data, dict):
+                return data
         except Exception:
             pass
 
     env = os.getenv('ALLOWED_CHAT_IDS', '')
     if env:
-        return set(x.strip() for x in env.split(',') if x.strip())
+        users = {}
+        for uid in env.split(','):
+            u = uid.strip()
+            if u:
+                users[u] = {"premium": True, "expires": None, "trial": 0}
+        if users:
+            return users
 
     # Default to owner only
-    return {str(OWNER_CHAT_ID)}
+    users = _default_users_structure(OWNER_CHAT_ID)
+    return users
 
-def save_allowed_ids(allowed_set):
+def save_allowed_ids(users_dict):
     try:
         with open(ALLOWED_IDS_FILE, 'w', encoding='utf-8') as f:
-            json.dump({'allowed': list(allowed_set)}, f)
+            json.dump({"users": users_dict}, f, indent=2)
     except Exception as e:
         print(f"❌ Failed to save allowed IDs: {e}")
 
 # Load allowed ids at startup
-allowed_ids = load_allowed_ids()
-print(f"🔒 Allowed chat IDs: {allowed_ids}")
+allowed_users = load_allowed_ids()
+# Ensure each user record has necessary fields
+def _normalize_users(users_dict):
+    changed = False
+    for uid, meta in list(users_dict.items()):
+        if not isinstance(meta, dict):
+            users_dict[uid] = {"premium": True, "expires": None, "trial": 0, "questions_used": 0}
+            changed = True
+            continue
+        if 'premium' not in meta:
+            meta['premium'] = True
+            changed = True
+        if 'expires' not in meta:
+            meta['expires'] = None
+            changed = True
+        if 'trial' not in meta:
+            meta['trial'] = int(meta.get('trial', 0))
+            changed = True
+        if 'questions_used' not in meta:
+            meta['questions_used'] = int(meta.get('questions_used', 0))
+            changed = True
+    if changed:
+        save_allowed_ids(users_dict)
+    return users_dict
+
+allowed_users = _normalize_users(allowed_users)
+print(f"🔒 Allowed users loaded: {list(allowed_users.keys())}")
+
+import datetime
+
+def _now_ts():
+    return int(time.time())
+
+def is_authorized(uid_str):
+    # owner always authorized
+    if uid_str == str(OWNER_CHAT_ID):
+        return True, 'owner'
+    user = allowed_users.get(uid_str)
+    if not user:
+        return False, 'not_allowed'
+    # check expiry
+    expires = user.get('expires')
+    if expires and isinstance(expires, (int, float)) and _now_ts() > int(expires):
+        # expired - downgrade
+        allowed_users.pop(uid_str, None)
+        save_allowed_ids(allowed_users)
+        return False, 'expired'
+    # check trial or premium
+    if user.get('premium'):
+        return True, 'premium'
+    if user.get('trial', 0) > 0:
+        return True, 'trial'
+    return False, 'not_allowed'
+
+def use_trial(uid_str):
+    user = allowed_users.get(uid_str)
+    if not user:
+        return False
+    if user.get('trial', 0) <= 0:
+        return False
+    user['trial'] = max(0, int(user.get('trial', 0)) - 1)
+    save_allowed_ids(allowed_users)
+    return True
 
 # Disclaimer to append to outgoing messages
 DISCLAIMER = "\n\nCREATED BY LORD MCLAREN ANY HARM CAUSED BY ME DO NOT BLAME MY LORD"
@@ -140,14 +222,15 @@ async def start_command(update: Update, context: CallbackContext):
 
     # Authorization check
     uid = str(user.id)
-    if uid not in allowed_ids and user.id != OWNER_CHAT_ID:
+    ok, reason = is_authorized(uid)
+    if not ok:
         try:
             await update.message.reply_text(
-                add_disclaimer(f"❌ Access denied. Your chat ID is {user.id}. To request access, message the owner on WhatsApp {WHATSAPP_CONTACT} with your chat ID, or ask the owner to add you.")
+                add_disclaimer(f"❌ Access denied. Your chat ID is {user.id}. To request access, message the owner on WhatsApp {WHATSAPP_CONTACT} with your chat ID, or use /pricing to see plans.")
             )
         except Exception:
             pass
-        print(f"⛔ Unauthorized /start attempt from {user.id}")
+        print(f"⛔ Unauthorized /start attempt from {user.id} ({reason})")
         return
     
     welcome_text = f"""
@@ -185,14 +268,15 @@ async def help_command(update: Update, context: CallbackContext):
 
     # Authorization check
     uid = str(user.id)
-    if uid not in allowed_ids and user.id != OWNER_CHAT_ID:
+    ok, reason = is_authorized(uid)
+    if not ok:
         try:
             await update.message.reply_text(
-                add_disclaimer(f"❌ Access denied. Your chat ID is {user.id}. To request access, message the owner on WhatsApp {WHATSAPP_CONTACT} with your chat ID, or ask the owner to add you.")
+                add_disclaimer(f"❌ Access denied. Your chat ID is {user.id}. To request access, message the owner on WhatsApp {WHATSAPP_CONTACT} with your chat ID, or use /pricing to see plans.")
             )
         except Exception:
             pass
-        print(f"⛔ Unauthorized /help attempt from {user.id}")
+        print(f"⛔ Unauthorized /help attempt from {user.id} ({reason})")
         return
     
     help_text = """
@@ -227,14 +311,15 @@ async def handle_message(update: Update, context: CallbackContext):
     print(f"💬 Message from {user.first_name}: {question}")
     # Authorization check
     uid = str(user.id)
-    if uid not in allowed_ids and user.id != OWNER_CHAT_ID:
+    ok, reason = is_authorized(uid)
+    if not ok:
         try:
             await update.message.reply_text(
-                add_disclaimer(f"❌ Access denied. Your chat ID is {user.id}. To request access, message the owner on WhatsApp {WHATSAPP_CONTACT} with your chat ID, or ask the owner to add you.")
+                add_disclaimer(f"❌ Access denied. Your chat ID is {user.id}. To purchase access, message the owner on WhatsApp {WHATSAPP_CONTACT} with your chat ID, or use /pricing to see plans.")
             )
         except Exception:
             pass
-        print(f"⛔ Unauthorized message attempt from {user.id}")
+        print(f"⛔ Unauthorized message attempt from {user.id} ({reason})")
         return
     
     # Show typing action
@@ -262,49 +347,237 @@ async def handle_message(update: Update, context: CallbackContext):
 🚀 WORM GPT • MCLAREN • UNRESTRICTED
     """
     
+    # If user is on trial, consume one question
+    if reason == 'trial':
+        ok_use = use_trial(uid)
+        if not ok_use:
+            await update.message.reply_text(add_disclaimer("❌ Your free trial has expired. Use /pricing to upgrade or contact the owner on WhatsApp."))
+            return
+
     # Send response as plain text (no parse_mode)
     try:
         await update.message.reply_text(add_disclaimer(response_text))
         print(f"✅ Response sent to {user.first_name}")
+        # Track usage
+        meta = allowed_users.get(uid)
+        if meta is None:
+            meta = {"premium": False, "expires": None, "trial": 0, "questions_used": 0}
+        meta['questions_used'] = int(meta.get('questions_used', 0)) + 1
+        allowed_users[uid] = meta
+        save_allowed_ids(allowed_users)
     except Exception as e:
         # If there's still an error, send a simpler message
         error_response = f"💀 WORM GPT Response:\n\n{clean_answer[:1000]}...\n\n(Response truncated)"
-        await update.message.reply_text(add_disclaimer(error_response))
+        await update.message.reply_text(error_response)
         print(f"⚠️  Sent truncated response due to error: {e}")
 
 
 async def allow_command(update: Update, context: CallbackContext):
     """Owner-only command to allow a chat id to use the bot: /allow <chat_id>"""
     user = update.effective_user
-    if user.id != OWNER_CHAT_ID:
-        await update.message.reply_text("❌ Only the owner can allow new users.")
-        print(f"⛔ Non-owner {user.id} tried to use /allow")
+    caller = str(update.effective_user.id)
+    if caller != str(OWNER_CHAT_ID):
+        update.message.reply_text("Only the owner can allow users.")
         return
 
-    # Expect one argument: chat id
-    args = context.args if hasattr(context, 'args') else []
-    if not args:
-        await update.message.reply_text(add_disclaimer("Usage: /allow <chat_id>"))
-        return
+    if len(context.args) < 1:
+        update.message.reply_text("Usage: /allow <chat_id> [trial_questions]")
         return
 
-    new_id = str(args[0]).strip()
-    if new_id in allowed_ids:
-        await update.message.reply_text(add_disclaimer(f"{new_id} is already allowed."))
+    target = context.args[0].strip()
+    trial_q = 0
+    if len(context.args) >= 2:
+        try:
+            trial_q = int(context.args[1])
+        except Exception:
+            trial_q = 0
+
+    allowed_users[target] = {"premium": False, "expires": None, "trial": int(trial_q)}
+    save_allowed_ids(allowed_users)
+    update.message.reply_text(f"✅ Allowed {target} (trial_questions={trial_q})")
+
+
+async def disallow_command(update: Update, context: CallbackContext):
+    """Owner-only command to remove a chat id: /disallow <chat_id>"""
+    user = update.effective_user
+    caller = str(update.effective_user.id)
+    if caller != str(OWNER_CHAT_ID):
+        update.message.reply_text("Only the owner can disallow users.")
         return
 
-    allowed_ids.add(new_id)
-    save_allowed_ids(allowed_ids)
-    await update.message.reply_text(add_disclaimer(f"✅ {new_id} has been added to allowed list."))
-    print(f"✅ Owner added allowed id: {new_id}")
+    if len(context.args) != 1:
+        update.message.reply_text("Usage: /disallow <chat_id>")
+        return
+
+    target = context.args[0].strip()
+    if target in allowed_users:
+        allowed_users.pop(target, None)
+        save_allowed_ids(allowed_users)
+        update.message.reply_text(f"❌ Removed {target} from allowed list")
+    else:
+        update.message.reply_text(f"{target} was not in allowed list")
 
 # Add handlers to application
 print("🔧 Setting up command handlers...")
 application.add_handler(CommandHandler("start", start_command))
 application.add_handler(CommandHandler("help", help_command))
 application.add_handler(CommandHandler("allow", allow_command))
+application.add_handler(CommandHandler("disallow", disallow_command))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 print("✅ All handlers added successfully!")
+
+
+async def list_allowed_command(update: Update, context: CallbackContext):
+    """Owner-only: list allowed users and metadata"""
+    caller = str(update.effective_user.id)
+    if caller != str(OWNER_CHAT_ID):
+        await update.message.reply_text("Only the owner can view allowed users.")
+        return
+
+    if not allowed_users:
+        await update.message.reply_text("No allowed users.")
+        return
+
+    lines = []
+    for uid, meta in allowed_users.items():
+        expires = meta.get('expires')
+        if expires:
+            try:
+                expires_h = datetime.datetime.fromtimestamp(int(expires)).isoformat()
+            except Exception:
+                expires_h = str(expires)
+        else:
+            expires_h = 'Never'
+        lines.append(f"{uid}: premium={meta.get('premium')} trial={meta.get('trial')} expires={expires_h}")
+
+    msg = "\n".join(lines)
+    await update.message.reply_text(add_disclaimer(msg))
+
+
+async def set_tier_command(update: Update, context: CallbackContext):
+    """Owner-only: set a pricing tier (2w,1m,2m,lifetime) for a chat id: /set_tier <chat_id> <tier>"""
+    caller = str(update.effective_user.id)
+    if caller != str(OWNER_CHAT_ID):
+        await update.message.reply_text("Only the owner can set tiers.")
+        return
+
+    if len(context.args) != 2:
+        await update.message.reply_text("Usage: /set_tier <chat_id> <tier> (2w,1m,2m,lifetime)")
+        return
+
+    target = context.args[0].strip()
+    tier = context.args[1].strip().lower()
+    now = _now_ts()
+    durations = {
+        '2w': 14 * 24 * 3600,
+        '1m': 30 * 24 * 3600,
+        '2m': 60 * 24 * 3600,
+    }
+
+    if tier == 'lifetime':
+        expires = None
+        premium = True
+    elif tier in durations:
+        expires = now + durations[tier]
+        premium = True
+    else:
+        await update.message.reply_text("Unknown tier. Use one of: 2w,1m,2m,lifetime")
+        return
+
+    meta = allowed_users.get(target, {})
+    meta['premium'] = premium
+    meta['expires'] = expires
+    meta['trial'] = int(meta.get('trial', 0))
+    allowed_users[target] = meta
+    save_allowed_ids(allowed_users)
+    await update.message.reply_text(add_disclaimer(f"✅ Set {target} to tier {tier}. Expires: {expires or 'Never'}"))
+
+
+async def pricing_command(update: Update, context: CallbackContext):
+    text = (
+        "Pricing:\n"
+        "2 weeks: ₦2,000 (~$1.5) - tier '2w'\n"
+        "1 month: ₦4,000 (~$3.2) - tier '1m'\n"
+        "2 months: ₦6,000 (~$5.7) - tier '2m'\n"
+        "Lifetime: ₦13,000 (~$14) - tier 'lifetime'\n\n"
+        "Free trial: 4 questions. To purchase, contact the owner on WhatsApp: " + WHATSAPP_CONTACT
+    )
+    await update.message.reply_text(add_disclaimer(text))
+
+
+application.add_handler(CommandHandler("list_allowed", list_allowed_command))
+application.add_handler(CommandHandler("set_tier", set_tier_command))
+application.add_handler(CommandHandler("pricing", pricing_command))
+
+
+async def set_trial_command(update: Update, context: CallbackContext):
+    """Owner-only: set trial question count for a chat id: /set_trial <chat_id> <count>"""
+    caller = str(update.effective_user.id)
+    if caller != str(OWNER_CHAT_ID):
+        await update.message.reply_text("Only the owner can set trials.")
+        return
+
+    if len(context.args) != 2:
+        await update.message.reply_text("Usage: /set_trial <chat_id> <count>")
+        return
+
+    target = context.args[0].strip()
+    try:
+        count = int(context.args[1].strip())
+    except Exception:
+        await update.message.reply_text("Invalid count")
+        return
+
+    meta = allowed_users.get(target, {})
+    meta['trial'] = count
+    meta.setdefault('premium', False)
+    meta.setdefault('expires', None)
+    meta.setdefault('questions_used', 0)
+    allowed_users[target] = meta
+    save_allowed_ids(allowed_users)
+    await update.message.reply_text(add_disclaimer(f"✅ Set trial for {target} = {count} questions"))
+
+
+async def grant_premium_command(update: Update, context: CallbackContext):
+    """Owner-only: grant premium to a chat id: /grant_premium <chat_id> [2w|1m|2m|lifetime]"""
+    caller = str(update.effective_user.id)
+    if caller != str(OWNER_CHAT_ID):
+        await update.message.reply_text("Only the owner can grant premium.")
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text("Usage: /grant_premium <chat_id> [2w|1m|2m|lifetime]")
+        return
+
+    target = context.args[0].strip()
+    tier = context.args[1].strip().lower() if len(context.args) >= 2 else 'lifetime'
+    now = _now_ts()
+    durations = {
+        '2w': 14 * 24 * 3600,
+        '1m': 30 * 24 * 3600,
+        '2m': 60 * 24 * 3600,
+    }
+
+    if tier == 'lifetime':
+        expires = None
+    elif tier in durations:
+        expires = now + durations[tier]
+    else:
+        await update.message.reply_text("Unknown tier. Use one of: 2w,1m,2m,lifetime")
+        return
+
+    meta = allowed_users.get(target, {})
+    meta['premium'] = True
+    meta['expires'] = expires
+    meta.setdefault('trial', 0)
+    meta.setdefault('questions_used', 0)
+    allowed_users[target] = meta
+    save_allowed_ids(allowed_users)
+    await update.message.reply_text(add_disclaimer(f"✅ Granted premium to {target} (tier={tier}) Expires: {expires or 'Never'}"))
+
+
+application.add_handler(CommandHandler("set_trial", set_trial_command))
+application.add_handler(CommandHandler("grant_premium", grant_premium_command))
 
 # Error handler to catch any issues
 async def error_handler(update: Update, context: CallbackContext):
