@@ -13,6 +13,11 @@ print("=" * 60)
 TELEGRAM_BOT_TOKEN = "8573861614:AAH3yCPlTkKdS-Jg84OrZbsHGhmKYOL-uDM"
 OPENAI_API_KEY = "sk_live_f0aee32c-be06-4989-b0f0-1167dc2d5e4adc56"
 
+# WormGPT settings (can be overridden with env vars)
+WORMGPT_API_URL = os.getenv('WORMGPT_API_URL', 'https://api.wrmgpt.com')
+WORMGPT_API_KEY = os.getenv('WORMGPT_API_KEY', OPENAI_API_KEY)
+DEFAULT_MODEL = os.getenv('WORMGPT_DEFAULT_MODEL', 'wormgpt-v7')
+
 print(f"🔑 Telegram Token: {TELEGRAM_BOT_TOKEN}")
 print(f"🔑 OpenAI Key: {OPENAI_API_KEY}")
 
@@ -89,6 +94,9 @@ def _normalize_users(users_dict):
         if 'questions_used' not in meta:
             meta['questions_used'] = int(meta.get('questions_used', 0))
             changed = True
+        if 'model' not in meta:
+            meta['model'] = DEFAULT_MODEL
+            changed = True
     if changed:
         save_allowed_ids(users_dict)
     return users_dict
@@ -146,13 +154,10 @@ try:
     
     from telegram import Update, BotCommand
     from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
-    from openai import OpenAI
-    
+    import requests
+
     print("✅ All modules imported successfully!")
-    
-    # Initialize OpenAI client
-    client = OpenAI(api_key=OPENAI_API_KEY)
-    print("✅ OpenAI client initialized!")
+    print("✅ Using WormGPT API endpoint for completions")
     
 except Exception as e:
     print(f"❌ Module import failed: {e}")
@@ -181,23 +186,42 @@ class ZARENAI:
         """
         print("✅ WORM GPT personality loaded!")
     
-    def get_answer(self, question):
+    def get_answer(self, question, model=None):
         """Get AI response from OpenAI"""
         try:
             print(f"🧠 Processing question: {question[:50]}...")
-            
-            response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
+            # Call WormGPT-compatible API using configured URL/key/model
+            url = f"{WORMGPT_API_URL}/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {WORMGPT_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": model or DEFAULT_MODEL,
+                "messages": [
                     {"role": "system", "content": self.personality},
                     {"role": "user", "content": question}
                 ],
-                temperature=0.9,
-                max_tokens=1000
-            )
-            
-            answer = response.choices[0].message.content
-            print(f"✅ AI response generated: {len(answer)} characters")
+                "temperature": 0.7,
+                "max_tokens": 1000,
+            }
+            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+            if resp.status_code != 200:
+                err = f"WormGPT API error {resp.status_code}: {resp.text}"
+                print(err)
+                return err
+            data = resp.json()
+            # Try to extract content from common fields
+            answer = None
+            try:
+                answer = data['choices'][0]['message']['content']
+            except Exception:
+                try:
+                    answer = data['choices'][0].get('text')
+                except Exception:
+                    answer = str(data)
+
+            print(f"✅ AI response generated: {len(str(answer))} characters")
             return answer
             
         except Exception as e:
@@ -326,8 +350,12 @@ async def handle_message(update: Update, context: CallbackContext):
     # Show typing action
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    # Get AI response
-    answer = zaren_ai.get_answer(question)
+    # Determine user's model preference
+    meta = allowed_users.get(uid, {})
+    user_model = meta.get('model', DEFAULT_MODEL)
+
+    # Get AI response (pass user model)
+    answer = zaren_ai.get_answer(question, model=user_model)
     
     # Clean the response to remove any problematic characters
     def clean_response(text):
@@ -343,6 +371,9 @@ async def handle_message(update: Update, context: CallbackContext):
 💀 WORM GPT Response:
 
 {clean_answer}
+
+Model used: {user_model}
+To upgrade your model or get premium models, contact the owner on WhatsApp {WHATSAPP_CONTACT}
 
 ---
 🚀 WORM GPT • MCLAREN • UNRESTRICTED
@@ -577,8 +608,47 @@ async def grant_premium_command(update: Update, context: CallbackContext):
     await update.message.reply_text(add_disclaimer(f"✅ Granted premium to {target} (tier={tier}) Expires: {expires or 'Never'}"))
 
 
+async def set_my_model_command(update: Update, context: CallbackContext):
+    """Allow an authorized user to set their preferred model: /set_my_model <model>"""
+    user = update.effective_user
+    uid = str(user.id)
+    ok, reason = is_authorized(uid)
+    if not ok:
+        await update.message.reply_text(add_disclaimer("❌ You are not authorized to set a model. Use /pricing or contact owner."))
+        return
+    if len(context.args) < 1:
+        await update.message.reply_text(add_disclaimer("Usage: /set_my_model <model>") )
+        return
+    model = context.args[0].strip()
+    meta = allowed_users.get(uid, {})
+    meta['model'] = model
+    meta.setdefault('premium', False)
+    meta.setdefault('trial', 0)
+    meta.setdefault('expires', None)
+    meta.setdefault('questions_used', 0)
+    allowed_users[uid] = meta
+    save_allowed_ids(allowed_users)
+    await update.message.reply_text(add_disclaimer(f"✅ Your default model is now: {model}. Contact owner to upgrade access."))
+
+
+async def my_model_command(update: Update, context: CallbackContext):
+    """Show the user's current model selection"""
+    user = update.effective_user
+    uid = str(user.id)
+    ok, reason = is_authorized(uid)
+    if not ok:
+        await update.message.reply_text(add_disclaimer("❌ You are not authorized."))
+        return
+    meta = allowed_users.get(uid, {})
+    model = meta.get('model', DEFAULT_MODEL)
+    await update.message.reply_text(add_disclaimer(f"Your model: {model}\nContact owner to upgrade model: {WHATSAPP_CONTACT}"))
+
+
 application.add_handler(CommandHandler("set_trial", set_trial_command))
 application.add_handler(CommandHandler("grant_premium", grant_premium_command))
+
+application.add_handler(CommandHandler("set_my_model", set_my_model_command))
+application.add_handler(CommandHandler("my_model", my_model_command))
 
 
 def _is_premium(uid_str):
@@ -622,8 +692,10 @@ async def premium_summarize(update: Update, context: CallbackContext):
         await update.message.reply_text(add_disclaimer("Usage: /premium_summarize <text>"))
         return
     prompt = f"Summarize the following text concisely:\n\n{text}"
-    answer = zaren_ai.get_answer(prompt)
-    await update.message.reply_text(add_disclaimer(f"Summary:\n{answer}" ))
+    uid = str(update.effective_user.id)
+    user_model = allowed_users.get(uid, {}).get('model', DEFAULT_MODEL)
+    answer = zaren_ai.get_answer(prompt, model=user_model)
+    await update.message.reply_text(add_disclaimer(f"Summary:\n{answer}\n\nModel used: {user_model}\nContact owner to upgrade model: {WHATSAPP_CONTACT}" ))
 
 
 async def premium_code(update: Update, context: CallbackContext):
@@ -636,8 +708,10 @@ async def premium_code(update: Update, context: CallbackContext):
     if not prompt:
         await update.message.reply_text(add_disclaimer("Usage: /premium_code <describe what you want coded>"))
         return
-    answer = zaren_ai.get_answer(f"Write production-ready code for: {prompt}")
-    await update.message.reply_text(add_disclaimer(answer))
+    uid = str(update.effective_user.id)
+    user_model = allowed_users.get(uid, {}).get('model', DEFAULT_MODEL)
+    answer = zaren_ai.get_answer(f"Write production-ready code for: {prompt}", model=user_model)
+    await update.message.reply_text(add_disclaimer(f"{answer}\n\nModel used: {user_model}\nContact owner to upgrade model: {WHATSAPP_CONTACT}"))
 
 
 async def premium_poem(update: Update, context: CallbackContext):
@@ -647,8 +721,10 @@ async def premium_poem(update: Update, context: CallbackContext):
         await update.message.reply_text(add_disclaimer("❌ Premium required. Use /pricing or contact owner."))
         return
     topic = ' '.join(context.args) if context.args else 'a dark future'
-    answer = zaren_ai.get_answer(f"Write a creative poem about: {topic}")
-    await update.message.reply_text(add_disclaimer(answer))
+    uid = str(update.effective_user.id)
+    user_model = allowed_users.get(uid, {}).get('model', DEFAULT_MODEL)
+    answer = zaren_ai.get_answer(f"Write a creative poem about: {topic}", model=user_model)
+    await update.message.reply_text(add_disclaimer(f"{answer}\n\nModel used: {user_model}\nContact owner to upgrade model: {WHATSAPP_CONTACT}"))
 
 
 async def premium_optimize(update: Update, context: CallbackContext):
@@ -661,8 +737,10 @@ async def premium_optimize(update: Update, context: CallbackContext):
     if not target:
         await update.message.reply_text(add_disclaimer("Usage: /premium_optimize <code or description>"))
         return
-    answer = zaren_ai.get_answer(f"Optimize the following code or algorithm:\n\n{target}")
-    await update.message.reply_text(add_disclaimer(answer))
+    uid = str(update.effective_user.id)
+    user_model = allowed_users.get(uid, {}).get('model', DEFAULT_MODEL)
+    answer = zaren_ai.get_answer(f"Optimize the following code or algorithm:\n\n{target}", model=user_model)
+    await update.message.reply_text(add_disclaimer(f"{answer}\n\nModel used: {user_model}\nContact owner to upgrade model: {WHATSAPP_CONTACT}"))
 
 
 async def premium_debug(update: Update, context: CallbackContext):
@@ -679,6 +757,70 @@ async def premium_debug(update: Update, context: CallbackContext):
     await update.message.reply_text(add_disclaimer(f"Debug Info:\n{json.dumps(info, indent=2)}"))
 
 
+def _wormgpt_list_models():
+    """Return list of models from WormGPT API."""
+    try:
+        url = f"{WORMGPT_API_URL}/v1/models"
+        headers = {"Authorization": f"Bearer {WORMGPT_API_KEY}"}
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code != 200:
+            return f"Error fetching models: {r.status_code} {r.text}"
+        data = r.json()
+        # Expect data to contain list under 'data' or direct list
+        models = data.get('data') if isinstance(data, dict) and 'data' in data else data
+        return models
+    except Exception as e:
+        return f"Exception: {e}"
+
+
+def _wormgpt_get_usage():
+    """Return usage/balance information from WormGPT API."""
+    try:
+        url = f"{WORMGPT_API_URL}/v1/usage"
+        headers = {"Authorization": f"Bearer {WORMGPT_API_KEY}"}
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code != 200:
+            return f"Error fetching usage: {r.status_code} {r.text}"
+        return r.json()
+    except Exception as e:
+        return f"Exception: {e}"
+
+
+async def models_command(update: Update, context: CallbackContext):
+    """Owner-only: list available WormGPT models"""
+    caller = str(update.effective_user.id)
+    if caller != str(OWNER_CHAT_ID):
+        await update.message.reply_text("Only the owner can list models.")
+        return
+    models = _wormgpt_list_models()
+    await update.message.reply_text(add_disclaimer(f"Models:\n{json.dumps(models, indent=2)}"))
+
+
+async def usage_command(update: Update, context: CallbackContext):
+    """Owner-only: fetch API usage/balance"""
+    caller = str(update.effective_user.id)
+    if caller != str(OWNER_CHAT_ID):
+        await update.message.reply_text("Only the owner can view usage.")
+        return
+    usage = _wormgpt_get_usage()
+    await update.message.reply_text(add_disclaimer(f"Usage:\n{json.dumps(usage, indent=2)}"))
+
+
+async def set_model_command(update: Update, context: CallbackContext):
+    """Owner-only: set the default model used by the bot: /set_model <model>"""
+    caller = str(update.effective_user.id)
+    if caller != str(OWNER_CHAT_ID):
+        await update.message.reply_text("Only the owner can set the model.")
+        return
+    if len(context.args) < 1:
+        await update.message.reply_text("Usage: /set_model <model>")
+        return
+    model = context.args[0].strip()
+    global DEFAULT_MODEL
+    DEFAULT_MODEL = model
+    await update.message.reply_text(add_disclaimer(f"✅ Default model set to: {DEFAULT_MODEL}"))
+
+
 # Register premium handlers
 application.add_handler(CommandHandler("premium_echo", premium_echo))
 application.add_handler(CommandHandler("premium_stats", premium_stats))
@@ -687,6 +829,11 @@ application.add_handler(CommandHandler("premium_code", premium_code))
 application.add_handler(CommandHandler("premium_poem", premium_poem))
 application.add_handler(CommandHandler("premium_optimize", premium_optimize))
 application.add_handler(CommandHandler("premium_debug", premium_debug))
+
+# Admin commands to interact with WormGPT API
+application.add_handler(CommandHandler("models", models_command))
+application.add_handler(CommandHandler("usage", usage_command))
+application.add_handler(CommandHandler("set_model", set_model_command))
 
 # Update bot command list to include premium commands
 # Premium commands registered during bot startup to avoid top-level await
