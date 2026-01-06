@@ -206,12 +206,39 @@ class ZARENAI:
                 "temperature": 0.7,
                 "max_tokens": 1000,
             }
-            resp = requests.post(url, headers=headers, json=payload, timeout=30)
-            if resp.status_code != 200:
-                err = f"WormGPT API error {resp.status_code}: {resp.text}"
-                print(err)
-                return err
-            data = resp.json()
+            # Retry loop for transient network/timeout errors
+            max_attempts = 3
+            backoff = 2
+            resp = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+                    if resp.status_code != 200:
+                        err = f"WormGPT API error {resp.status_code}: {resp.text}"
+                        print(err)
+                        # Don't retry on HTTP errors other than 5xx
+                        if 500 <= resp.status_code < 600 and attempt < max_attempts:
+                            print(f"⏳ Server error, retrying in {backoff}s...")
+                            time.sleep(backoff)
+                            backoff *= 2
+                            continue
+                        return f"WormGPT API error {resp.status_code}: {resp.text}"
+                    data = resp.json()
+                    break
+                except requests.Timeout:
+                    print(f"⏱️ WormGPT timeout on attempt {attempt}/{max_attempts}")
+                    if attempt < max_attempts:
+                        time.sleep(backoff)
+                        backoff *= 2
+                        continue
+                    return f"WormGPT API timeout after {max_attempts} attempts. Please try again later or contact the owner {WHATSAPP_CONTACT}."
+                except requests.RequestException as e:
+                    print(f"❌ WormGPT request failed (attempt {attempt}): {e}")
+                    if attempt < max_attempts:
+                        time.sleep(backoff)
+                        backoff *= 2
+                        continue
+                    return f"WormGPT API request failed: {e}"
             # Try to extract content from common fields
             answer = None
             try:
