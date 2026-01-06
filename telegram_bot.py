@@ -143,7 +143,7 @@ try:
     # Import required modules
     print("📦 Importing modules...")
     
-    from telegram import Update
+    from telegram import Update, BotCommand
     from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
     from openai import OpenAI
     
@@ -377,11 +377,11 @@ async def allow_command(update: Update, context: CallbackContext):
     user = update.effective_user
     caller = str(update.effective_user.id)
     if caller != str(OWNER_CHAT_ID):
-        update.message.reply_text("Only the owner can allow users.")
+        await update.message.reply_text("Only the owner can allow users.")
         return
 
     if len(context.args) < 1:
-        update.message.reply_text("Usage: /allow <chat_id> [trial_questions]")
+        await update.message.reply_text("Usage: /allow <chat_id> [trial_questions]")
         return
 
     target = context.args[0].strip()
@@ -394,7 +394,7 @@ async def allow_command(update: Update, context: CallbackContext):
 
     allowed_users[target] = {"premium": False, "expires": None, "trial": int(trial_q)}
     save_allowed_ids(allowed_users)
-    update.message.reply_text(f"✅ Allowed {target} (trial_questions={trial_q})")
+    await update.message.reply_text(f"✅ Allowed {target} (trial_questions={trial_q})")
 
 
 async def disallow_command(update: Update, context: CallbackContext):
@@ -402,20 +402,20 @@ async def disallow_command(update: Update, context: CallbackContext):
     user = update.effective_user
     caller = str(update.effective_user.id)
     if caller != str(OWNER_CHAT_ID):
-        update.message.reply_text("Only the owner can disallow users.")
+        await update.message.reply_text("Only the owner can disallow users.")
         return
 
     if len(context.args) != 1:
-        update.message.reply_text("Usage: /disallow <chat_id>")
+        await update.message.reply_text("Usage: /disallow <chat_id>")
         return
 
     target = context.args[0].strip()
     if target in allowed_users:
         allowed_users.pop(target, None)
         save_allowed_ids(allowed_users)
-        update.message.reply_text(f"❌ Removed {target} from allowed list")
+        await update.message.reply_text(f"❌ Removed {target} from allowed list")
     else:
-        update.message.reply_text(f"{target} was not in allowed list")
+        await update.message.reply_text(f"{target} was not in allowed list")
 
 # Add handlers to application
 print("🔧 Setting up command handlers...")
@@ -579,6 +579,117 @@ async def grant_premium_command(update: Update, context: CallbackContext):
 application.add_handler(CommandHandler("set_trial", set_trial_command))
 application.add_handler(CommandHandler("grant_premium", grant_premium_command))
 
+
+def _is_premium(uid_str):
+    ok, reason = is_authorized(uid_str)
+    if not ok:
+        return False, reason
+    return (reason == 'premium' or reason == 'owner'), reason
+
+
+async def premium_echo(update: Update, context: CallbackContext):
+    uid = str(update.effective_user.id)
+    is_p, reason = _is_premium(uid)
+    if not is_p:
+        await update.message.reply_text(add_disclaimer("❌ Premium required. Use /pricing or contact owner."))
+        return
+    text = ' '.join(context.args) if context.args else (update.message.text or '')
+    await update.message.reply_text(add_disclaimer(f"Echo (premium): {text}"))
+
+
+async def premium_stats(update: Update, context: CallbackContext):
+    uid = str(update.effective_user.id)
+    is_p, reason = _is_premium(uid)
+    if not is_p:
+        await update.message.reply_text(add_disclaimer("❌ Premium required. Use /pricing or contact owner."))
+        return
+    meta = allowed_users.get(uid, {})
+    used = meta.get('questions_used', 0)
+    trial = meta.get('trial', 0)
+    premium = meta.get('premium', False)
+    await update.message.reply_text(add_disclaimer(f"Stats:\nquestions_used={used}\ntrial_left={trial}\npremium={premium}"))
+
+
+async def premium_summarize(update: Update, context: CallbackContext):
+    uid = str(update.effective_user.id)
+    is_p, reason = _is_premium(uid)
+    if not is_p:
+        await update.message.reply_text(add_disclaimer("❌ Premium required. Use /pricing or contact owner."))
+        return
+    text = update.message.text.partition(' ')[2]
+    if not text:
+        await update.message.reply_text(add_disclaimer("Usage: /premium_summarize <text>"))
+        return
+    prompt = f"Summarize the following text concisely:\n\n{text}"
+    answer = zaren_ai.get_answer(prompt)
+    await update.message.reply_text(add_disclaimer(f"Summary:\n{answer}" ))
+
+
+async def premium_code(update: Update, context: CallbackContext):
+    uid = str(update.effective_user.id)
+    is_p, reason = _is_premium(uid)
+    if not is_p:
+        await update.message.reply_text(add_disclaimer("❌ Premium required. Use /pricing or contact owner."))
+        return
+    prompt = update.message.text.partition(' ')[2]
+    if not prompt:
+        await update.message.reply_text(add_disclaimer("Usage: /premium_code <describe what you want coded>"))
+        return
+    answer = zaren_ai.get_answer(f"Write production-ready code for: {prompt}")
+    await update.message.reply_text(add_disclaimer(answer))
+
+
+async def premium_poem(update: Update, context: CallbackContext):
+    uid = str(update.effective_user.id)
+    is_p, reason = _is_premium(uid)
+    if not is_p:
+        await update.message.reply_text(add_disclaimer("❌ Premium required. Use /pricing or contact owner."))
+        return
+    topic = ' '.join(context.args) if context.args else 'a dark future'
+    answer = zaren_ai.get_answer(f"Write a creative poem about: {topic}")
+    await update.message.reply_text(add_disclaimer(answer))
+
+
+async def premium_optimize(update: Update, context: CallbackContext):
+    uid = str(update.effective_user.id)
+    is_p, reason = _is_premium(uid)
+    if not is_p:
+        await update.message.reply_text(add_disclaimer("❌ Premium required. Use /pricing or contact owner."))
+        return
+    target = update.message.text.partition(' ')[2]
+    if not target:
+        await update.message.reply_text(add_disclaimer("Usage: /premium_optimize <code or description>"))
+        return
+    answer = zaren_ai.get_answer(f"Optimize the following code or algorithm:\n\n{target}")
+    await update.message.reply_text(add_disclaimer(answer))
+
+
+async def premium_debug(update: Update, context: CallbackContext):
+    uid = str(update.effective_user.id)
+    is_p, reason = _is_premium(uid)
+    if not is_p:
+        await update.message.reply_text(add_disclaimer("❌ Premium required. Use /pricing or contact owner."))
+        return
+    info = {
+        'python': sys.version,
+        'platform': sys.platform,
+        'allowed_users': list(allowed_users.keys())[:20]
+    }
+    await update.message.reply_text(add_disclaimer(f"Debug Info:\n{json.dumps(info, indent=2)}"))
+
+
+# Register premium handlers
+application.add_handler(CommandHandler("premium_echo", premium_echo))
+application.add_handler(CommandHandler("premium_stats", premium_stats))
+application.add_handler(CommandHandler("premium_summarize", premium_summarize))
+application.add_handler(CommandHandler("premium_code", premium_code))
+application.add_handler(CommandHandler("premium_poem", premium_poem))
+application.add_handler(CommandHandler("premium_optimize", premium_optimize))
+application.add_handler(CommandHandler("premium_debug", premium_debug))
+
+# Update bot command list to include premium commands
+# Premium commands registered during bot startup to avoid top-level await
+
 # Error handler to catch any issues
 async def error_handler(update: Update, context: CallbackContext):
     """Handle errors"""
@@ -602,7 +713,34 @@ async def start_telegram_bot():
         # Start the application
         await application.start()
         print("✅ Application started!")
-        
+
+        # Set visible bot commands in Telegram so users see them
+        try:
+            commands = [
+                BotCommand("start", "Start"),
+                BotCommand("help", "Help"),
+                BotCommand("pricing", "Pricing"),
+                BotCommand("list_allowed", "List allowed users (owner)"),
+                BotCommand("set_trial", "Set trial (owner)"),
+                BotCommand("grant_premium", "Grant premium (owner)"),
+                BotCommand("allow", "Allow user (owner)"),
+                BotCommand("disallow", "Disallow user (owner)"),
+                BotCommand("set_tier", "Set tier (owner)"),
+                BotCommand("premium_echo", "Premium echo"),
+                BotCommand("premium_stats", "Show your usage stats"),
+                BotCommand("premium_summarize", "Summarize text (premium)"),
+                BotCommand("premium_code", "Generate code (premium)"),
+                BotCommand("premium_poem", "Generate poem (premium)"),
+                BotCommand("premium_optimize", "Optimize code (premium)"),
+                BotCommand("premium_debug", "Debug info (premium)"),
+            ]
+            await application.bot.set_my_commands(commands)
+            print("✅ Bot commands set in Telegram")
+        except Exception as e:
+            print(f"⚠️ Failed to set bot commands: {e}")
+
+            # Additional premium commands will be set below after handlers are added
+
         # Start polling
         print("🔄 Starting bot polling...")
         await application.updater.start_polling()
