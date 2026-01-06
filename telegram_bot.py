@@ -264,16 +264,35 @@ print("✅ WORM GPT instance created successfully!")
 
 # Create Telegram application
 print("📱 Creating Telegram application...")
-# Configure HTTP request timeouts for the telegram client to reduce connect/read timeouts
+# Configure HTTP request timeouts for the telegram client to reduce connect/read timeouts.
+# Be robust: try multiple import paths for Request and fall back to the default Application.
+request = None
+application = None
 try:
-    # Import Request here so it's attempted when dependencies are available at runtime
-    from telegram.request import Request
-    request = Request(con_pool_size=8, connect_timeout=60, read_timeout=120, pool_timeout=10)
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request).build()
-    print("✅ Telegram application created with custom Request timeouts!")
-except Exception:
+    TGRequest = None
+    try:
+        from telegram.request import Request as TGRequest
+    except Exception:
+        try:
+            from telegram.utils.request import Request as TGRequest
+        except Exception:
+            TGRequest = None
+
+    if TGRequest is not None:
+        try:
+            # Create Request with larger connect/read timeouts to mitigate Render network slowness
+            request = TGRequest(con_pool_size=8, connect_timeout=60, read_timeout=120, pool_timeout=10)
+            application = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request).build()
+            print("✅ Telegram application created with custom Request timeouts!")
+        except Exception as e:
+            print(f"⚠️ Failed to construct custom Request: {e}")
+
+    if application is None:
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        print("⚠️ Telegram Request unavailable or custom Request failed; created application with default Request.")
+except Exception as e:
+    print(f"❌ Unexpected error creating Telegram application: {e}")
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    print("⚠️ Telegram Request class unavailable or custom Request failed; created application with default Request.")
 
 # Define command handlers
 async def start_command(update: Update, context: CallbackContext):
