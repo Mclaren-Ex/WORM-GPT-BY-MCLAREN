@@ -153,10 +153,6 @@ try:
     print("📦 Importing modules...")
     
     from telegram import Update, BotCommand
-    try:
-        from telegram.request import Request
-    except Exception:
-        Request = None
     from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
     import requests
 
@@ -269,17 +265,15 @@ print("✅ WORM GPT instance created successfully!")
 # Create Telegram application
 print("📱 Creating Telegram application...")
 # Configure HTTP request timeouts for the telegram client to reduce connect/read timeouts
-if Request is not None:
-    try:
-        request = Request(con_pool_size=8, connect_timeout=20, read_timeout=60, pool_timeout=5)
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request).build()
-        print("✅ Telegram application created with custom Request timeouts!")
-    except Exception:
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        print("⚠️ Telegram application created with default Request (custom timeouts failed).")
-else:
+try:
+    # Import Request here so it's attempted when dependencies are available at runtime
+    from telegram.request import Request
+    request = Request(con_pool_size=8, connect_timeout=60, read_timeout=120, pool_timeout=10)
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request).build()
+    print("✅ Telegram application created with custom Request timeouts!")
+except Exception:
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    print("⚠️ Telegram Request class unavailable; created application with default Request.")
+    print("⚠️ Telegram Request class unavailable or custom Request failed; created application with default Request.")
 
 # Define command handlers
 async def start_command(update: Update, context: CallbackContext):
