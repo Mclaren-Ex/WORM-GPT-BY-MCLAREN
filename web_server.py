@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 # HARDCODED API KEYS
 TELEGRAM_BOT_TOKEN = "8573861614:AAH3yCPlTkKdS-Jg84OrZbsHGhmKYOL-uDM"
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = "sk_live_f0aee32c-be06-4989-b0f0-1167dc2d5e4adc56"
 
 print("🚀 WORM GPT WEB SERVER STARTING...")
 print(f"🔑 Telegram Token: {TELEGRAM_BOT_TOKEN}")
