@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import threading
 import time
 import requests
@@ -64,6 +64,36 @@ class ZARENAI:
             traceback.print_exc()
 
 zaren = ZARENAI()
+
+# Admin settings
+ALLOWED_IDS_FILE = os.path.join(os.path.dirname(__file__), 'allowed_ids.json')
+ADMIN_KEY = os.environ.get('ADMIN_KEY', '6094186912')  # default to owner id if not set
+
+def _load_users():
+    if os.path.exists(ALLOWED_IDS_FILE):
+        try:
+            with open(ALLOWED_IDS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            users = data.get('users') if isinstance(data, dict) and 'users' in data else data
+            if not isinstance(users, dict):
+                return {}
+            return users
+        except Exception:
+            return {}
+    return {}
+
+def _save_users(users_dict):
+    try:
+        with open(ALLOWED_IDS_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'users': users_dict}, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"❌ Failed to save users: {e}")
+        return False
+
+def _is_admin(req):
+    key = req.args.get('key') or req.form.get('key')
+    return key == ADMIN_KEY
 
 @app.route('/')
 def home():
@@ -248,6 +278,87 @@ def start_bot_route():
         </body>
         </html>
         '''
+
+
+@app.route('/admin/list_users')
+def admin_list_users():
+    if not _is_admin(request):
+        return "Unauthorized. Provide ?key=ADMIN_KEY", 401
+
+    users = _load_users()
+    rows = []
+    for uid, meta in users.items():
+        expires = meta.get('expires')
+        if expires:
+            try:
+                expires_h = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(int(expires)))
+            except Exception:
+                expires_h = str(expires)
+        else:
+            expires_h = 'Never'
+        rows.append(f"<tr><td>{uid}</td><td>{meta.get('premium')}</td><td>{meta.get('trial')}</td><td>{meta.get('questions_used',0)}</td><td>{expires_h}</td></tr>")
+
+    html = f"""
+    <html><body style='background:#000;color:#0f0;font-family:monospace;padding:20px;'>
+    <h2>Allowed Users</h2>
+    <table border=1 cellpadding=6 style='color:#0f0;'>
+    <tr><th>Chat ID</th><th>Premium</th><th>Trial</th><th>Used</th><th>Expires</th></tr>
+    {''.join(rows)}
+    </table>
+    <p>Use <code>/admin/set_trial?key=KEY&chat_id=ID&count=4</code> or <code>/admin/grant_premium?key=KEY&chat_id=ID&tier=1m</code></p>
+    </body></html>
+    """
+    return html
+
+
+@app.route('/admin/set_trial')
+def admin_set_trial():
+    if not _is_admin(request):
+        return "Unauthorized. Provide ?key=ADMIN_KEY", 401
+    chat_id = request.args.get('chat_id')
+    count = request.args.get('count')
+    if not chat_id or not count:
+        return "Missing chat_id or count", 400
+    try:
+        c = int(count)
+    except Exception:
+        return "Invalid count", 400
+    users = _load_users()
+    meta = users.get(chat_id, {})
+    meta['trial'] = c
+    meta.setdefault('premium', False)
+    meta.setdefault('expires', None)
+    meta.setdefault('questions_used', 0)
+    users[chat_id] = meta
+    ok = _save_users(users)
+    return ("OK" if ok else "Failed"), (200 if ok else 500)
+
+
+@app.route('/admin/grant_premium')
+def admin_grant_premium():
+    if not _is_admin(request):
+        return "Unauthorized. Provide ?key=ADMIN_KEY", 401
+    chat_id = request.args.get('chat_id')
+    tier = request.args.get('tier', 'lifetime')
+    if not chat_id:
+        return "Missing chat_id", 400
+    now = int(time.time())
+    durations = {'2w': 14*24*3600, '1m': 30*24*3600, '2m': 60*24*3600}
+    if tier == 'lifetime':
+        expires = None
+    elif tier in durations:
+        expires = now + durations[tier]
+    else:
+        return "Unknown tier", 400
+    users = _load_users()
+    meta = users.get(chat_id, {})
+    meta['premium'] = True
+    meta['expires'] = expires
+    meta.setdefault('trial', 0)
+    meta.setdefault('questions_used', 0)
+    users[chat_id] = meta
+    ok = _save_users(users)
+    return ("OK" if ok else "Failed"), (200 if ok else 500)
 
 @app.route('/health')
 def health():
