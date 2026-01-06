@@ -3,6 +3,7 @@ import sys
 import os
 import json
 import time
+import traceback
 
 print("=" * 60)
 print("🤖 WORM GPT TELEGRAM BOT - STARTING...")
@@ -703,64 +704,65 @@ application.add_error_handler(error_handler)
 
 async def start_telegram_bot():
     """Main async function to start the bot"""
-    try:
-        print("🎯 Initializing Telegram bot...")
-        
-        # Initialize the application
-        await application.initialize()
-        print("✅ Application initialized!")
-        
-        # Start the application
-        await application.start()
-        print("✅ Application started!")
-
-        # Set visible bot commands in Telegram so users see them
+    max_retries = 6
+    delay = 3
+    for attempt in range(1, max_retries + 1):
         try:
-            commands = [
-                BotCommand("start", "Start"),
-                BotCommand("help", "Help"),
-                BotCommand("pricing", "Pricing"),
-                BotCommand("list_allowed", "List allowed users (owner)"),
-                BotCommand("set_trial", "Set trial (owner)"),
-                BotCommand("grant_premium", "Grant premium (owner)"),
-                BotCommand("allow", "Allow user (owner)"),
-                BotCommand("disallow", "Disallow user (owner)"),
-                BotCommand("set_tier", "Set tier (owner)"),
-                BotCommand("premium_echo", "Premium echo"),
-                BotCommand("premium_stats", "Show your usage stats"),
-                BotCommand("premium_summarize", "Summarize text (premium)"),
-                BotCommand("premium_code", "Generate code (premium)"),
-                BotCommand("premium_poem", "Generate poem (premium)"),
-                BotCommand("premium_optimize", "Optimize code (premium)"),
-                BotCommand("premium_debug", "Debug info (premium)"),
-            ]
-            await application.bot.set_my_commands(commands)
-            print("✅ Bot commands set in Telegram")
+            print("🎯 Initializing Telegram bot...")
+
+            # Initialize the application
+            await application.initialize()
+            print("✅ Application initialized!")
+
+            # Start the application
+            await application.start()
+            print("✅ Application started!")
+
+            # Set visible bot commands in Telegram so users see them
+            try:
+                commands = [
+                    BotCommand("start", "Start"),
+                    BotCommand("help", "Help"),
+                    BotCommand("pricing", "Pricing"),
+                    BotCommand("list_allowed", "List allowed users (owner)"),
+                    BotCommand("set_trial", "Set trial (owner)"),
+                    BotCommand("grant_premium", "Grant premium (owner)"),
+                    BotCommand("allow", "Allow user (owner)"),
+                    BotCommand("disallow", "Disallow user (owner)"),
+                    BotCommand("set_tier", "Set tier (owner)"),
+                    BotCommand("premium_echo", "Premium echo"),
+                    BotCommand("premium_stats", "Show your usage stats"),
+                    BotCommand("premium_summarize", "Summarize text (premium)"),
+                    BotCommand("premium_code", "Generate code (premium)"),
+                    BotCommand("premium_poem", "Generate poem (premium)"),
+                    BotCommand("premium_optimize", "Optimize code (premium)"),
+                    BotCommand("premium_debug", "Debug info (premium)"),
+                ]
+                await application.bot.set_my_commands(commands)
+                print("✅ Bot commands set in Telegram")
+            except Exception as e:
+                print(f"⚠️ Failed to set bot commands: {e}")
+
+            # Start polling
+            print("🔄 Starting bot polling...")
+            await application.updater.start_polling()
+            print("✅ Bot polling started successfully!")
+
+            print("=" * 60)
+            print("🎉 WORM GPT TELEGRAM BOT IS NOW LIVE!")
+            print("💀 Bot is running and ready to receive messages!")
+            print("🔗 Test your bot: https://t.me/8496762088Bot")
+            print("=" * 60)
+
+            # Keep the bot running
+            while True:
+                await asyncio.sleep(3600)  # Sleep for 1 hour
+
         except Exception as e:
-            print(f"⚠️ Failed to set bot commands: {e}")
-
-            # Additional premium commands will be set below after handlers are added
-
-        # Start polling
-        print("🔄 Starting bot polling...")
-        await application.updater.start_polling()
-        print("✅ Bot polling started successfully!")
-        
-        print("=" * 60)
-        print("🎉 WORM GPT TELEGRAM BOT IS NOW LIVE!")
-        print("💀 Bot is running and ready to receive messages!")
-        print("🔗 Test your bot: https://t.me/8496762088Bot")
-        print("=" * 60)
-        
-        # Keep the bot running
-        while True:
-            await asyncio.sleep(3600)  # Sleep for 1 hour
-            
-    except Exception as e:
-        print(f"❌ Bot startup failed: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
+            print(f"❌ Bot startup failed: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
 async def stop_telegram_bot():
     """Stop the bot gracefully"""
