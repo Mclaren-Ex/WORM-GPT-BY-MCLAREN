@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, jsonify
 import threading
 import time
 import requests
@@ -32,19 +32,29 @@ class ZARENAI:
             print("✅ BOT THREAD: Event loop created")
             
             try:
-                # Import and run the bot
+                # Import and run the bot with retries on transient errors
                 from telegram_bot import start_telegram_bot
                 print("✅ BOT THREAD: Bot module imported")
-                
-                # Run the async bot function
-                loop.run_until_complete(start_telegram_bot())
-                
-                print("✅ BOT THREAD: Bot started successfully!")
-                
-            except Exception as e:
-                print(f"❌ BOT THREAD: Bot execution failed: {e}")
-                import traceback
-                traceback.print_exc()
+
+                max_retries = 5
+                delay = 5
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        # Run the async bot function
+                        loop.run_until_complete(start_telegram_bot())
+                        print("✅ BOT THREAD: Bot started successfully!")
+                        break
+                    except Exception as e:
+                        print(f"❌ BOT THREAD: Attempt {attempt} failed: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        if attempt < max_retries:
+                            print(f"⏳ Retrying bot start in {delay} seconds...")
+                            time.sleep(delay)
+                            delay *= 2
+                        else:
+                            print("❌ BOT THREAD: All retries failed. Giving up.")
+                            raise
             finally:
                 loop.close()
                 
