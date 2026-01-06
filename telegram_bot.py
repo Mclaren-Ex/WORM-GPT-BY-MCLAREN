@@ -153,6 +153,7 @@ try:
     print("📦 Importing modules...")
     
     from telegram import Update, BotCommand
+    from telegram.request import Request
     from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
     import requests
 
@@ -264,8 +265,15 @@ print("✅ WORM GPT instance created successfully!")
 
 # Create Telegram application
 print("📱 Creating Telegram application...")
-application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-print("✅ Telegram application created!")
+# Configure HTTP request timeouts for the telegram client to reduce connect/read timeouts
+try:
+    request = Request(con_pool_size=8, connect_timeout=20, read_timeout=60, pool_timeout=5)
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request).build()
+    print("✅ Telegram application created with custom Request timeouts!")
+except Exception:
+    # Fallback to default builder if something goes wrong
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    print("⚠️ Telegram application created with default Request (custom timeouts failed).")
 
 # Define command handlers
 async def start_command(update: Update, context: CallbackContext):
@@ -934,10 +942,18 @@ async def start_telegram_bot():
                 await asyncio.sleep(3600)  # Sleep for 1 hour
 
         except Exception as e:
-            print(f"❌ Bot startup failed: {e}")
+            print(f"❌ Bot startup failed on attempt {attempt}/{max_retries}: {e}")
             import traceback
             traceback.print_exc()
-            raise
+            # Retry with exponential backoff instead of re-raising immediately
+            if attempt < max_retries:
+                wait = delay * (2 ** (attempt - 1))
+                print(f"⏳ Retrying bot startup in {wait} seconds...")
+                await asyncio.sleep(wait)
+                continue
+            else:
+                print("❌ Max startup attempts reached; exiting start loop.")
+                return
 
 async def stop_telegram_bot():
     """Stop the bot gracefully"""
