@@ -207,26 +207,30 @@ class ZARENAI:
                 "temperature": 0.7,
                 "max_tokens": 1000,
             }
-            # Retry loop for transient network/timeout errors
-            max_attempts = 3
+            # Retry loop for transient network/timeout errors. Increase attempts and timeout.
+            max_attempts = 5
             backoff = 2
+            timeout = 60
             resp = None
             for attempt in range(1, max_attempts + 1):
                 try:
-                    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+                    resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
                     if resp.status_code != 200:
                         err = f"WormGPT API error {resp.status_code}: {resp.text}"
                         print(err)
-                        # Don't retry on HTTP errors other than 5xx
+                        # Retry on 5xx server errors
                         if 500 <= resp.status_code < 600 and attempt < max_attempts:
-                            print(f"⏳ Server error, retrying in {backoff}s...")
+                            print(f"⏳ Server error, retrying in {backoff}s (attempt {attempt}/{max_attempts})...")
                             time.sleep(backoff)
                             backoff *= 2
                             continue
                         return f"WormGPT API error {resp.status_code}: {resp.text}"
-                    data = resp.json()
+                    try:
+                        data = resp.json()
+                    except Exception:
+                        data = None
                     break
-                except requests.Timeout:
+                except (requests.Timeout, requests.exceptions.ReadTimeout, requests.exceptions.ConnectTimeout):
                     print(f"⏱️ WormGPT timeout on attempt {attempt}/{max_attempts}")
                     if attempt < max_attempts:
                         time.sleep(backoff)
@@ -234,7 +238,7 @@ class ZARENAI:
                         continue
                     return f"WormGPT API timeout after {max_attempts} attempts. Please try again later or contact the owner {WHATSAPP_CONTACT}."
                 except requests.RequestException as e:
-                    print(f"❌ WormGPT request failed (attempt {attempt}): {e}")
+                    print(f"❌ WormGPT request failed (attempt {attempt}/{max_attempts}): {e}")
                     if attempt < max_attempts:
                         time.sleep(backoff)
                         backoff *= 2
@@ -410,8 +414,8 @@ async def handle_message(update: Update, context: CallbackContext):
     meta = allowed_users.get(uid, {})
     user_model = meta.get('model', DEFAULT_MODEL)
 
-    # Get AI response (pass user model)
-    answer = zaren_ai.get_answer(question, model=user_model)
+    # Get AI response (pass user model) — run in thread to avoid blocking event loop
+    answer = await asyncio.to_thread(zaren_ai.get_answer, question, user_model)
     
     # Clean the response to remove any problematic characters
     def clean_response(text):
@@ -750,7 +754,7 @@ async def premium_summarize(update: Update, context: CallbackContext):
     prompt = f"Summarize the following text concisely:\n\n{text}"
     uid = str(update.effective_user.id)
     user_model = allowed_users.get(uid, {}).get('model', DEFAULT_MODEL)
-    answer = zaren_ai.get_answer(prompt, model=user_model)
+    answer = await asyncio.to_thread(zaren_ai.get_answer, prompt, user_model)
     await update.message.reply_text(add_disclaimer(f"Summary:\n{answer}\n\nModel used: {user_model}\nContact owner to upgrade model: {WHATSAPP_CONTACT}" ))
 
 
@@ -766,7 +770,7 @@ async def premium_code(update: Update, context: CallbackContext):
         return
     uid = str(update.effective_user.id)
     user_model = allowed_users.get(uid, {}).get('model', DEFAULT_MODEL)
-    answer = zaren_ai.get_answer(f"Write production-ready code for: {prompt}", model=user_model)
+    answer = await asyncio.to_thread(zaren_ai.get_answer, f"Write production-ready code for: {prompt}", user_model)
     await update.message.reply_text(add_disclaimer(f"{answer}\n\nModel used: {user_model}\nContact owner to upgrade model: {WHATSAPP_CONTACT}"))
 
 
@@ -779,7 +783,7 @@ async def premium_poem(update: Update, context: CallbackContext):
     topic = ' '.join(context.args) if context.args else 'a dark future'
     uid = str(update.effective_user.id)
     user_model = allowed_users.get(uid, {}).get('model', DEFAULT_MODEL)
-    answer = zaren_ai.get_answer(f"Write a creative poem about: {topic}", model=user_model)
+    answer = await asyncio.to_thread(zaren_ai.get_answer, f"Write a creative poem about: {topic}", user_model)
     await update.message.reply_text(add_disclaimer(f"{answer}\n\nModel used: {user_model}\nContact owner to upgrade model: {WHATSAPP_CONTACT}"))
 
 
@@ -795,7 +799,7 @@ async def premium_optimize(update: Update, context: CallbackContext):
         return
     uid = str(update.effective_user.id)
     user_model = allowed_users.get(uid, {}).get('model', DEFAULT_MODEL)
-    answer = zaren_ai.get_answer(f"Optimize the following code or algorithm:\n\n{target}", model=user_model)
+    answer = await asyncio.to_thread(zaren_ai.get_answer, f"Optimize the following code or algorithm:\n\n{target}", user_model)
     await update.message.reply_text(add_disclaimer(f"{answer}\n\nModel used: {user_model}\nContact owner to upgrade model: {WHATSAPP_CONTACT}"))
 
 
