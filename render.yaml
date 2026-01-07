@@ -1,6 +1,26 @@
 services:
   - type: web
-    name: worm-gpt
+    name: worm-gptservices:
+  - type: web
+    name: worm-gpt-new
+    env: python
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: gunicorn web_server:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12
+      - key: RENDER
+        value: true
+      - key: TELEGRAM_BOT_TOKEN
+        value: ""
+      - key: WORMGPT_API_KEY
+        value: ""
+    healthCheckPath: /health
+    autoDeploy: true
+
     env: python
     plan: free
     region: oregon
@@ -14,3 +34,4 @@ services:
         value: true
     healthCheckPath: /health
     autoDeploy: true
+
