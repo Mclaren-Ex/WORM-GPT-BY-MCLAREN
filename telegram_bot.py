@@ -9,8 +9,9 @@ print("=" * 60)
 print("🤖 WORM GPT TELEGRAM BOT - STARTING...")
 print("=" * 60)
 
-# HARDCODED Telegram token (consider using env var in production)
-TELEGRAM_BOT_TOKEN = "8573861614:AAH3yCPlTkKdS-Jg84OrZbsHGhmKYOL-uDM"
+# Telegram token: prefer environment variable in production
+# Falls back to the existing hardcoded value if `TELEGRAM_BOT_TOKEN` is not set.
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8573861614:AAH3yCPlTkKdS-Jg84OrZbsHGhmKYOL-uDM")
 
 # WormGPT settings (can be overridden with env vars)
 # Only WormGPT is used; set WORMGPT_API_KEY in environment.
@@ -18,7 +19,7 @@ WORMGPT_API_URL = os.getenv('WORMGPT_API_URL', 'https://api.wrmgpt.com')
 WORMGPT_API_KEY = os.getenv('WORMGPT_API_KEY', '')
 DEFAULT_MODEL = os.getenv('WORMGPT_DEFAULT_MODEL', 'wormgpt-v7')
 
-print(f"🔑 Telegram Token: {TELEGRAM_BOT_TOKEN}")
+print(f"🔑 Telegram Token: {'(set)' if os.getenv('TELEGRAM_BOT_TOKEN') else '(fallback/hardcoded)'}")
 print(f"🔑 WormGPT Key: {'(set)' if WORMGPT_API_KEY else '(not set)'}")
 
 # Owner and contact info
